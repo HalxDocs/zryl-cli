@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"runtime"
 	"time"
 )
 
@@ -74,6 +76,20 @@ func main() {
 	for _, line := range stderrLines {
 		fmt.Fprintln(os.Stderr, line)
 	}
+
+	// Runtime metadata
+	cwd, _ := os.Getwd()
+	duration := end.Sub(start)
+	osName := runtime.GOOS
+	arch := runtime.GOARCH
+
+	fmt.Printf(
+		"[zryl] env: %s/%s · cwd=%s · duration=%s\n",
+		osName,
+		arch,
+		filepath.Base(cwd),
+		duration,
+	)
 
 	fmt.Printf(
 		"\n[zryl] run captured (%s → %s, exit=%d)\n",
