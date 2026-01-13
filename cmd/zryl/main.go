@@ -2,12 +2,18 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"time"
+
+	"github.com/joho/godotenv"
 )
 
 // splitLines converts raw output into clean line slices
@@ -33,8 +39,81 @@ func splitLines(s string) []string {
 	return lines
 }
 
+// Run represents a single captured execution
+type Run struct {
+	Command    string    `json:"command"`
+	Stdout     []string  `json:"stdout"`
+	Stderr     []string  `json:"stderr"`
+	ExitCode   int       `json:"exit_code"`
+	StartedAt  time.Time `json:"started_at"`
+	FinishedAt time.Time `json:"finished_at"`
+	DurationMs int64     `json:"duration_ms"`
+
+	OS   string `json:"os"`
+	Arch string `json:"arch"`
+	Cwd  string `json:"cwd"`
+}
+
+// uploadRun sends the run to Supabase and returns the run ID
+func uploadRun(run Run) (string, error) {
+	supabaseURL := os.Getenv("ZRYL_SUPABASE_URL")
+	supabaseKey := os.Getenv("ZRYL_SUPABASE_SERVICE_KEY")
+
+	if supabaseURL == "" || supabaseKey == "" {
+		return "", fmt.Errorf("missing Supabase environment variables")
+	}
+
+	payload, err := json.Marshal(run)
+	if err != nil {
+		return "", err
+	}
+
+	req, err := http.NewRequest(
+		http.MethodPost,
+		supabaseURL+"/rest/v1/runs",
+		bytes.NewBuffer(payload),
+	)
+	if err != nil {
+		return "", err
+	}
+
+	req.Header.Set("apikey", supabaseKey)
+	req.Header.Set("Authorization", "Bearer "+supabaseKey)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Prefer", "return=representation")
+
+	client := &http.Client{Timeout: 10 * time.Second}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(resp.Body)
+		return "", fmt.Errorf("upload failed (%s): %s", resp.Status, strings.TrimSpace(string(body)))
+	}
+
+	var inserted []struct {
+		ID string `json:"id"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&inserted); err != nil {
+		return "", err
+	}
+
+	if len(inserted) == 0 || inserted[0].ID == "" {
+		return "", fmt.Errorf("no run ID returned from Supabase")
+	}
+
+	return inserted[0].ID, nil
+}
+
 func main() {
-	// Ensure a command was provided
+	// Load .env if present (dev only)
+	_ = godotenv.Load()
+
 	if len(os.Args) < 2 {
 		fmt.Println("usage: zryl <command> [args...]")
 		os.Exit(1)
@@ -60,16 +139,14 @@ func main() {
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			exitCode = exitErr.ExitCode()
 		} else {
-			fmt.Println("zryl: failed to execute command:", err)
+			fmt.Fprintln(os.Stderr, "zryl: failed to execute command:", err)
 			os.Exit(1)
 		}
 	}
 
-	// Normalize output
 	stdoutLines := splitLines(stdout.String())
 	stderrLines := splitLines(stderr.String())
 
-	// Print output exactly as the command produced it
 	for _, line := range stdoutLines {
 		fmt.Println(line)
 	}
@@ -77,16 +154,39 @@ func main() {
 		fmt.Fprintln(os.Stderr, line)
 	}
 
-	// Runtime metadata
 	cwd, _ := os.Getwd()
 	duration := end.Sub(start)
-	osName := runtime.GOOS
-	arch := runtime.GOARCH
+
+	run := Run{
+		Command:    strings.Join(append([]string{command}, args...), " "),
+		Stdout:     stdoutLines,
+		Stderr:     stderrLines,
+		ExitCode:   exitCode,
+		StartedAt:  start,
+		FinishedAt: end,
+		DurationMs: duration.Milliseconds(),
+		OS:         runtime.GOOS,
+		Arch:       runtime.GOARCH,
+		Cwd:        cwd,
+	}
+
+	runID, uploadErr := uploadRun(run)
+
+	baseURL := os.Getenv("ZRYL_BASE_URL")
+	if baseURL == "" {
+		baseURL = "https://zryl.vercel.app"
+	}
+
+	if uploadErr != nil {
+		fmt.Fprintln(os.Stderr, "[zryl] upload failed:", uploadErr)
+	} else {
+		fmt.Printf("[zryl] link: %s/run/%s\n", baseURL, runID)
+	}
 
 	fmt.Printf(
 		"[zryl] env: %s/%s · cwd=%s · duration=%s\n",
-		osName,
-		arch,
+		runtime.GOOS,
+		runtime.GOARCH,
 		filepath.Base(cwd),
 		duration,
 	)
@@ -98,6 +198,5 @@ func main() {
 		exitCode,
 	)
 
-	// Exit with the same exit code as the command
 	os.Exit(exitCode)
 }
