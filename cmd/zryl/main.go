@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"io"
 	"net/http"
@@ -16,17 +17,18 @@ import (
 	"github.com/joho/godotenv"
 )
 
-// splitLines converts raw output into clean line slices
+//
+// ---------- helpers ----------
+//
+
 func splitLines(s string) []string {
 	lines := []string{}
 	current := ""
 
 	for _, r := range s {
 		if r == '\n' {
-			if current != "" {
-				lines = append(lines, current)
-				current = ""
-			}
+			lines = append(lines, current)
+			current = ""
 			continue
 		}
 		current += string(r)
@@ -39,7 +41,27 @@ func splitLines(s string) []string {
 	return lines
 }
 
-// Run represents a single captured execution
+func detectShell() (string, []string) {
+	if runtime.GOOS == "windows" {
+		// Prefer PowerShell if available
+		if _, err := exec.LookPath("powershell"); err == nil {
+			return "powershell", []string{"-NoProfile", "-Command"}
+		}
+		return "cmd", []string{"/C"}
+	}
+
+	// Unix-like systems
+	if shell := os.Getenv("SHELL"); shell != "" {
+		return shell, []string{"-c"}
+	}
+
+	return "/bin/sh", []string{"-c"}
+}
+
+//
+// ---------- models ----------
+//
+
 type Run struct {
 	Command    string    `json:"command"`
 	Stdout     []string  `json:"stdout"`
@@ -48,18 +70,20 @@ type Run struct {
 	StartedAt  time.Time `json:"started_at"`
 	FinishedAt time.Time `json:"finished_at"`
 	DurationMs int64     `json:"duration_ms"`
-
-	OS   string `json:"os"`
-	Arch string `json:"arch"`
-	Cwd  string `json:"cwd"`
+	OS         string    `json:"os"`
+	Arch       string    `json:"arch"`
+	Cwd        string    `json:"cwd"`
 }
 
-// uploadRun sends the run to Supabase and returns the run ID
+//
+// ---------- upload ----------
+//
+
 func uploadRun(run Run) (string, error) {
 	supabaseURL := os.Getenv("ZRYL_SUPABASE_URL")
-	supabaseKey := os.Getenv("ZRYL_SUPABASE_SERVICE_KEY")
+	serviceKey := os.Getenv("ZRYL_SUPABASE_SERVICE_KEY")
 
-	if supabaseURL == "" || supabaseKey == "" {
+	if supabaseURL == "" || serviceKey == "" {
 		return "", fmt.Errorf("missing Supabase environment variables")
 	}
 
@@ -77,13 +101,12 @@ func uploadRun(run Run) (string, error) {
 		return "", err
 	}
 
-	req.Header.Set("apikey", supabaseKey)
-	req.Header.Set("Authorization", "Bearer "+supabaseKey)
+	req.Header.Set("apikey", serviceKey)
+	req.Header.Set("Authorization", "Bearer "+serviceKey)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Prefer", "return=representation")
 
 	client := &http.Client{Timeout: 10 * time.Second}
-
 	resp, err := client.Do(req)
 	if err != nil {
 		return "", err
@@ -92,7 +115,11 @@ func uploadRun(run Run) (string, error) {
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		body, _ := io.ReadAll(resp.Body)
-		return "", fmt.Errorf("upload failed (%s): %s", resp.Status, strings.TrimSpace(string(body)))
+		return "", fmt.Errorf(
+			"upload failed (%s): %s",
+			resp.Status,
+			strings.TrimSpace(string(body)),
+		)
 	}
 
 	var inserted []struct {
@@ -103,30 +130,45 @@ func uploadRun(run Run) (string, error) {
 		return "", err
 	}
 
-	if len(inserted) == 0 || inserted[0].ID == "" {
-		return "", fmt.Errorf("no run ID returned from Supabase")
+	if len(inserted) == 0 {
+		return "", fmt.Errorf("no run ID returned")
 	}
 
 	return inserted[0].ID, nil
 }
 
+//
+// ---------- main ----------
+//
+
 func main() {
-	// Load .env if present (dev only)
 	_ = godotenv.Load()
 
-	if len(os.Args) < 2 {
-		fmt.Println("usage: zryl <command> [args...]")
+	if len(os.Args) < 2 || os.Args[1] != "run" {
+		fmt.Println("usage: zryl run [--no-upload] [--json] <command>")
 		os.Exit(1)
 	}
 
-	command := os.Args[1]
-	args := os.Args[2:]
+	runFlags := flag.NewFlagSet("run", flag.ExitOnError)
+	noUpload := runFlags.Bool("no-upload", false, "do not upload run")
+	jsonOut := runFlags.Bool("json", false, "print run as JSON")
 
-	cmd := exec.Command(command, args...)
+	_ = runFlags.Parse(os.Args[2:])
+	cmdArgs := runFlags.Args()
+
+	if len(cmdArgs) == 0 {
+		fmt.Println("zryl run: missing command")
+		os.Exit(1)
+	}
+
+	// Shell detection
+	shell, shellArgs := detectShell()
+	fullCommand := strings.Join(cmdArgs, " ")
+
+	cmd := exec.Command(shell, append(shellArgs, fullCommand)...)
 
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 
@@ -136,8 +178,8 @@ func main() {
 
 	exitCode := 0
 	if err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			exitCode = exitErr.ExitCode()
+		if ee, ok := err.(*exec.ExitError); ok {
+			exitCode = ee.ExitCode()
 		} else {
 			fmt.Fprintln(os.Stderr, "zryl: failed to execute command:", err)
 			os.Exit(1)
@@ -147,18 +189,19 @@ func main() {
 	stdoutLines := splitLines(stdout.String())
 	stderrLines := splitLines(stderr.String())
 
-	for _, line := range stdoutLines {
-		fmt.Println(line)
+	// Print command output exactly
+	for _, l := range stdoutLines {
+		fmt.Println(l)
 	}
-	for _, line := range stderrLines {
-		fmt.Fprintln(os.Stderr, line)
+	for _, l := range stderrLines {
+		fmt.Fprintln(os.Stderr, l)
 	}
 
 	cwd, _ := os.Getwd()
 	duration := end.Sub(start)
 
 	run := Run{
-		Command:    strings.Join(append([]string{command}, args...), " "),
+		Command:    fullCommand,
 		Stdout:     stdoutLines,
 		Stderr:     stderrLines,
 		ExitCode:   exitCode,
@@ -170,17 +213,24 @@ func main() {
 		Cwd:        cwd,
 	}
 
-	runID, uploadErr := uploadRun(run)
-
-	baseURL := os.Getenv("ZRYL_BASE_URL")
-	if baseURL == "" {
-		baseURL = "https://zryl.vercel.app"
+	if *jsonOut {
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		_ = enc.Encode(run)
+		os.Exit(exitCode)
 	}
 
-	if uploadErr != nil {
-		fmt.Fprintln(os.Stderr, "[zryl] upload failed:", uploadErr)
-	} else {
-		fmt.Printf("[zryl] link: %s/run/%s\n", baseURL, runID)
+	if !*noUpload {
+		runID, err := uploadRun(run)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "[zryl] upload failed:", err)
+		} else {
+			baseURL := os.Getenv("ZRYL_BASE_URL")
+			if baseURL == "" {
+				baseURL = "https://zryl.vercel.app"
+			}
+			fmt.Printf("[zryl] link: %s/run/%s\n", baseURL, runID)
+		}
 	}
 
 	fmt.Printf(
@@ -192,7 +242,7 @@ func main() {
 	)
 
 	fmt.Printf(
-		"\n[zryl] run captured (%s → %s, exit=%d)\n",
+		"[zryl] run captured (%s → %s, exit=%d)\n",
 		start.Format(time.RFC3339),
 		end.Format(time.RFC3339),
 		exitCode,
