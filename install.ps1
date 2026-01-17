@@ -1,15 +1,20 @@
+$ErrorActionPreference = "Stop"
+
 $arch = "amd64"
-$url = "https://github.com/HalxDocs/zryl/releases/latest/download/zryl-windows-amd64.exe"
-
 $installDir = "$env:USERPROFILE\bin"
-New-Item -ItemType Directory -Force -Path $installDir | Out-Null
+$exe = "zryl.exe"
+$dest = "$installDir\$exe"
 
-$dest = "$installDir\zryl.exe"
-Invoke-WebRequest $url -OutFile $dest
+$uri = "https://github.com/HalxDocs/zryl-cli/releases/latest/download/zryl-windows-amd64.exe"
+
+Write-Host "Installing zryl..."
+
+New-Item -ItemType Directory -Force -Path $installDir | Out-Null
+Invoke-WebRequest $uri -OutFile $dest
 
 if ($env:PATH -notlike "*$installDir*") {
   setx PATH "$env:PATH;$installDir"
 }
 
-Write-Host "zryl installed successfully 🎉"
+Write-Host "zryl installed successfully ✅"
 Write-Host "Restart your terminal and run: zryl run npm run dev"
