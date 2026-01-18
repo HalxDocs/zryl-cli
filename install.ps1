@@ -1,23 +1,26 @@
 $ErrorActionPreference = "Stop"
 
-$Repo = "HalxDocs/zryl-cli"
-$InstallDir = "$env:USERPROFILE\bin"
-$Exe = "zryl.exe"
-$Dest = "$InstallDir\$Exe"
+$repo = "HalxDocs/zryl-cli"
+$installDir = "$env:USERPROFILE\bin"
+$exeName = "zryl.exe"
+$dest = "$installDir\$exeName"
 
-$Arch = "amd64"
-$Uri = "https://github.com/$Repo/releases/latest/download/zryl-windows-$Arch.exe"
+$asset = "zryl-windows-amd64.exe"
+$uri = "https://github.com/$repo/releases/latest/download/$asset"
 
-Write-Host "Installing zryl..."
+Write-Host "Installing zryl..." -ForegroundColor Cyan
 
-New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
+# Create bin dir
+New-Item -ItemType Directory -Force -Path $installDir | Out-Null
 
-Invoke-WebRequest $Uri -OutFile $Dest
+# Download binary
+Invoke-WebRequest $uri -OutFile $dest
 
-if ($env:PATH -notlike "*$InstallDir*") {
-  setx PATH "$env:PATH;$InstallDir" | Out-Null
+# Add to PATH if needed
+if ($env:PATH -notlike "*$installDir*") {
+  setx PATH "$env:PATH;$installDir" | Out-Null
 }
 
-Write-Host "zryl installed successfully ✅"
-Write-Host "Restart your terminal and run:"
+Write-Host "zryl installed successfully ✅" -ForegroundColor Green
+Write-Host "Restart your terminal and run:" -ForegroundColor Yellow
 Write-Host "  zryl run npm run dev"
