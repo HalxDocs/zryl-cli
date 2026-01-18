@@ -1,22 +1,45 @@
 #!/usr/bin/env sh
 set -e
 
-OS=$(uname -s | tr '[:upper:]' '[:lower:]')
-ARCH=$(uname -m)
+REPO="HalxDocs/zryl-cli"
+BIN_NAME="zryl"
+INSTALL_DIR="/usr/local/bin"
+
+echo "Installing zryl..."
+
+OS="$(uname | tr '[:upper:]' '[:lower:]')"
+ARCH="$(uname -m)"
 
 case "$ARCH" in
   x86_64) ARCH="amd64" ;;
   arm64|aarch64) ARCH="arm64" ;;
+  *)
+    echo "Unsupported architecture: $ARCH"
+    exit 1
+    ;;
 esac
 
-BINARY="zryl-${OS}-${ARCH}"
-URL="https://github.com/HalxDocs/zryl/releases/latest/download/$BINARY"
+case "$OS" in
+  linux|darwin) ;;
+  *)
+    echo "Unsupported OS: $OS"
+    exit 1
+    ;;
+esac
 
-INSTALL_DIR="/usr/local/bin"
+URL="https://github.com/$REPO/releases/latest/download/zryl-$OS-$ARCH"
 
-echo "Installing zryl..."
-curl -fsSL "$URL" -o "$INSTALL_DIR/zryl"
-chmod +x "$INSTALL_DIR/zryl"
+TMP="$(mktemp)"
+curl -fsSL "$URL" -o "$TMP"
 
-echo "zryl installed successfully 🎉"
- 
+chmod +x "$TMP"
+
+if [ ! -w "$INSTALL_DIR" ]; then
+  echo "Requesting sudo permission to install to $INSTALL_DIR"
+  sudo mv "$TMP" "$INSTALL_DIR/$BIN_NAME"
+else
+  mv "$TMP" "$INSTALL_DIR/$BIN_NAME"
+fi
+
+echo "zryl installed successfully ✅"
+echo "Run: zryl run npm run dev"
