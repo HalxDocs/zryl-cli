@@ -43,14 +43,12 @@ func splitLines(s string) []string {
 
 func detectShell() (string, []string) {
 	if runtime.GOOS == "windows" {
-		// Prefer PowerShell if available
 		if _, err := exec.LookPath("powershell"); err == nil {
 			return "powershell", []string{"-NoProfile", "-Command"}
 		}
 		return "cmd", []string{"/C"}
 	}
 
-	// Unix-like systems
 	if shell := os.Getenv("SHELL"); shell != "" {
 		return shell, []string{"-c"}
 	}
@@ -73,6 +71,7 @@ type Run struct {
 	OS         string    `json:"os"`
 	Arch       string    `json:"arch"`
 	Cwd        string    `json:"cwd"`
+	Visibility string    `json:"visibility"` // NEW
 }
 
 //
@@ -145,13 +144,15 @@ func main() {
 	_ = godotenv.Load()
 
 	if len(os.Args) < 2 || os.Args[1] != "run" {
-		fmt.Println("usage: zryl run [--no-upload] [--json] <command>")
+		fmt.Println("usage: zryl run [--public|--private] [--no-upload] [--json] <command>")
 		os.Exit(1)
 	}
 
 	runFlags := flag.NewFlagSet("run", flag.ExitOnError)
 	noUpload := runFlags.Bool("no-upload", false, "do not upload run")
 	jsonOut := runFlags.Bool("json", false, "print run as JSON")
+	private := runFlags.Bool("private", false, "mark run as private") // NEW
+	public := runFlags.Bool("public", false, "mark run as public")   // NEW
 
 	_ = runFlags.Parse(os.Args[2:])
 	cmdArgs := runFlags.Args()
@@ -161,7 +162,16 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Shell detection
+	// Visibility resolution (default = public)
+	visibility := "public"
+	if *private {
+		visibility = "private"
+	}
+	if *public {
+		visibility = "public"
+	}
+
+	// Shell execution
 	shell, shellArgs := detectShell()
 	fullCommand := strings.Join(cmdArgs, " ")
 
@@ -189,7 +199,6 @@ func main() {
 	stdoutLines := splitLines(stdout.String())
 	stderrLines := splitLines(stderr.String())
 
-	// Print command output exactly
 	for _, l := range stdoutLines {
 		fmt.Println(l)
 	}
@@ -211,6 +220,7 @@ func main() {
 		OS:         runtime.GOOS,
 		Arch:       runtime.GOARCH,
 		Cwd:        cwd,
+		Visibility: visibility, // NEW
 	}
 
 	if *jsonOut {
@@ -234,11 +244,12 @@ func main() {
 	}
 
 	fmt.Printf(
-		"[zryl] env: %s/%s · cwd=%s · duration=%s\n",
+		"[zryl] env: %s/%s · cwd=%s · duration=%s · visibility=%s\n",
 		runtime.GOOS,
 		runtime.GOARCH,
 		filepath.Base(cwd),
 		duration,
+		visibility,
 	)
 
 	fmt.Printf(

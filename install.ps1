@@ -5,7 +5,7 @@ $installDir = "$env:USERPROFILE\bin"
 $exe = "zryl.exe"
 $dest = "$installDir\$exe"
 
-$uri = "https://github.com/HalxDocs/zryl-cli/releases/latest/download/zryl-windows-amd64.exe"
+$uri = "https://github.com/HalxDocs/zryl-cl i/releases/latest/download/zryl-windows-amd64.exe"
 
 Write-Host "Installing zryl..."
 
